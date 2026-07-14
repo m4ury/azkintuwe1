@@ -1,9 +1,9 @@
 <?php
 
+use App\Http\Controllers\SismauleController;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
-use App\Http\Controllers\SismauleController;
 
 Route::get('/', function () {
     return Inertia::render('Welcome', [
@@ -23,4 +23,6 @@ Route::middleware([
         return Inertia::render('Dashboard');
     })->name('dashboard');
     Route::get('/sismaule', [SismauleController::class, 'index'])->name('sismaule.index');
+    Route::post('/sismaule/paciente-grupo-prioritario', [SismauleController::class, 'obtenerPacienteGrupoPrioritario'])
+        ->name('sismaule.paciente-grupo-prioritario');
 });

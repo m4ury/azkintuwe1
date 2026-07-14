@@ -18,7 +18,7 @@ const loading = ref(false);
 const error = ref(null);
 const success = ref(null);
 
-const endpoint = '/router2.php/sismaulev1/PacienteDeGrupoPrioritarioEyD/obtenerPacienteGrupoPrioritario';
+const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
 
 const isDssm = computed(() => props.user?.establecimiento?.codigo === '01000');
 const userComuna = computed(() => props.user?.establecimiento?.comuna ?? null);
@@ -73,31 +73,35 @@ const handleSubmit = async () => {
     success.value = null;
 
     try {
-        const url = `${selectedServer.value}${endpoint}`;
         const comuna = selectedComuna.value;
         const payload = {
+            server_url: selectedServer.value,
             comuna: comuna.codigo,
-            comuna_nombre: comuna.nombre,
-            usuario: props.user.name,
+            usuario: 'salud',
+            Modulo: 'SALUD',
         };
 
-        console.log('Enviando petición a:', url);
+        console.log('Enviando petición a:', route('sismaule.paciente-grupo-prioritario'));
         console.log('Datos:', payload);
 
-        const response = await fetch(url, {
+        const response = await fetch(route('sismaule.paciente-grupo-prioritario'), {
             method: 'POST',
             headers: {
                 'Accept': 'application/json',
                 'Content-Type': 'application/json',
+                'usuario': 'salud',
+                'Modulo': 'SALUD',
+                ...(csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {}),
             },
             body: JSON.stringify(payload),
         });
 
+        const data = await response.json().catch(() => null);
+
         if (!response.ok) {
-            throw new Error(`Error ${response.status}: ${response.statusText}`);
+            throw new Error(data?.message ?? `Error ${response.status}: ${response.statusText}`);
         }
 
-        const data = await response.json();
         console.log('Respuesta del servicio:', data);
         success.value = 'Datos obtenidos correctamente';
     } catch (err) {
