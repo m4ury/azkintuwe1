@@ -23,6 +23,8 @@ Route::middleware([
         return Inertia::render('Dashboard');
     })->name('dashboard');
     Route::get('/sismaule', [SismauleController::class, 'index'])->name('sismaule.index');
-    Route::post('/sismaule/paciente-grupo-prioritario', [SismauleController::class, 'obtenerPacienteGrupoPrioritario'])
+    Route::get('/sismaule/paciente-grupo-prioritario', [SismauleController::class, 'obtenerPacienteGrupoPrioritario'])
         ->name('sismaule.paciente-grupo-prioritario');
+    Route::get('/sismaule/descargar-csv', [SismauleController::class, 'descargarCsv'])
+        ->name('sismaule.descargar-csv');
 });

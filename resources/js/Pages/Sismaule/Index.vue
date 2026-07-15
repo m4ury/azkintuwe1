@@ -17,6 +17,7 @@ const selectedComunaValue = ref('');
 const loading = ref(false);
 const error = ref(null);
 const success = ref(null);
+const csvPath = ref(null);
 
 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
 
@@ -38,7 +39,7 @@ const comunaOptions = computed(() =>
 );
 
 const selectedComuna = computed(() => {
-    if (! isDssm.value) {
+    if (!isDssm.value) {
         return userComuna.value;
     }
 
@@ -46,13 +47,13 @@ const selectedComuna = computed(() => {
 });
 
 const validateForm = () => {
-    if (! selectedServer.value) {
+    if (!selectedServer.value) {
         error.value = 'Debe seleccionar un servidor';
 
         return false;
     }
 
-    if (! selectedComuna.value) {
+    if (!selectedComuna.value) {
         error.value = isDssm.value
             ? 'Debe seleccionar una comuna'
             : 'No se encontró una comuna asociada al usuario';
@@ -64,35 +65,37 @@ const validateForm = () => {
 };
 
 const handleSubmit = async () => {
-    if (! validateForm()) {
+    if (!validateForm()) {
         return;
     }
 
     loading.value = true;
     error.value = null;
     success.value = null;
+    csvPath.value = null;
 
     try {
         const comuna = selectedComuna.value;
-        const payload = {
-            /* server_url: selectedServer.value, */
+        const params = new URLSearchParams({
+            server_url: selectedServer.value,
             comuna: comuna.codigo,
-        };
+        });
 
         console.log('Enviando petición a:', route('sismaule.paciente-grupo-prioritario'));
-        console.log('Datos:', payload);
+        console.log('Query params:', params.toString());
 
-        const response = await fetch(route('sismaule.paciente-grupo-prioritario'), {
-            method: 'POST',
-            headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'usuario': 'salud',
-                'Modulo': 'SALUD',
-                ...(csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {}),
+        const response = await fetch(
+            `${route('sismaule.paciente-grupo-prioritario')}?${params.toString()}`,
+            {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                    'usuario': 'salud',
+                    'Modulo': 'SALUD',
+                    ...(csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {}),
+                },
             },
-            body: JSON.stringify(payload),
-        });
+        );
 
         const data = await response.json().catch(() => null);
 
@@ -102,6 +105,10 @@ const handleSubmit = async () => {
 
         console.log('Respuesta del servicio:', data);
         success.value = 'Datos obtenidos correctamente';
+
+        if (data.csv_path) {
+            csvPath.value = data.csv_path;
+        }
     } catch (err) {
         error.value = `Error al consumir el servicio: ${err.message}`;
         console.error(err);
@@ -110,7 +117,6 @@ const handleSubmit = async () => {
     }
 };
 </script>
-
 
 <template>
     <AppLayout title="Dashboard">
@@ -159,6 +165,15 @@ const handleSubmit = async () => {
 
                     <div v-if="success" class="mt-6 bg-green-50 border border-green-200 rounded-lg p-4">
                         <p class="text-green-700">{{ success }}</p>
+                    </div>
+
+                    <div v-if="csvPath" class="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <p class="text-blue-700 text-sm font-medium mb-2">
+                            Archivo CSV guardado:
+                        </p>
+                        <code class="block text-xs text-blue-600 bg-blue-100 rounded px-2 py-1 break-all">
+                            {{ csvPath }}
+                        </code>
                     </div>
 
                     <div class="mt-6 flex justify-end">

@@ -26,7 +26,6 @@ class SismaulePacienteGrupoPrioritarioRequest extends FormRequest
         return [
             'server_url' => ['required', 'url', Rule::in($this->configuredServerUrls())],
             'comuna' => ['required', 'string', 'max:255'],
-            'comuna_nombre' => ['required', 'string', 'max:255'],
         ];
     }
 
