@@ -75,10 +75,8 @@ const handleSubmit = async () => {
     try {
         const comuna = selectedComuna.value;
         const payload = {
-            server_url: selectedServer.value,
+            /* server_url: selectedServer.value, */
             comuna: comuna.codigo,
-            usuario: 'salud',
-            Modulo: 'SALUD',
         };
 
         console.log('Enviando petición a:', route('sismaule.paciente-grupo-prioritario'));
