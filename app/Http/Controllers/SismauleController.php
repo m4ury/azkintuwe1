@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Inertia\Response;
+use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 
 class SismauleController extends Controller
 {
@@ -175,4 +177,78 @@ class SismauleController extends Controller
     {
         return rtrim($serverUrl, '/').self::PACIENTE_GRUPO_PRIORITARIO_ENDPOINT;
     }
+
+    public function descargarCsv(Request $request)
+{
+    $request->validate([
+        'path' => 'required|string',
+    ]);
+
+    $rutaSegura = $this->sanitizarRuta($request->query('path'));
+
+    // Solo permite rutas dentro de sismaule/
+    if (!Str::startsWith($rutaSegura, 'sismaule/')) {
+        abort(403, 'Ruta no permitida.');
+    }
+
+    if (!Storage::exists($rutaSegura)) {
+        abort(404, 'Archivo no encontrado.');
+    }
+
+    $user = Auth::user()->load('establecimiento.comuna');
+
+    // Si no es DSSM, solo puede descargar archivos de su propia comuna
+    if (!$this->esDssm($user)) {
+        $comuna = $user->establecimiento?->comuna;
+        $carpetaPermitida = $comuna ? "sismaule/{$comuna->codigo}/" : null;
+
+        if (!$carpetaPermitida || !Str::startsWith($rutaSegura, $carpetaPermitida)) {
+            abort(403, 'No tienes acceso a este archivo.');
+        }
+    }
+
+    return Storage::download($rutaSegura);
+}
+
+public function listarArchivosCsv(): JsonResponse
+{
+    $user = Auth::user()->load('establecimiento.comuna');
+
+    if ($this->esDssm($user)) {
+        $carpetas = Storage::directories('sismaule');
+    } else {
+        $comuna = $user->establecimiento?->comuna;
+        $carpetas = $comuna ? ["sismaule/{$comuna->codigo}"] : [];
+    }
+
+    $archivos = [];
+
+    foreach ($carpetas as $carpeta) {
+        foreach (Storage::files($carpeta) as $archivo) {
+            $archivos[] = [
+                'nombre' => basename($archivo),
+                'path' => $archivo,
+                'modificado' => Storage::lastModified($archivo),
+                'modificado_legible' => now()
+                    ->createFromTimestamp(Storage::lastModified($archivo))
+                    ->format('d-m-Y H:i'),
+            ];
+        }
+    }
+
+    usort($archivos, fn ($a, $b) => $b['modificado'] <=> $a['modificado']);
+
+    return response()->json(array_values($archivos));
+}
+
+private function sanitizarRuta(string $ruta): string
+{
+    $ruta = str_replace(['..', '\\'], '', $ruta);
+    return ltrim($ruta, '/');
+}
+
+private function esDssm($user): bool
+{
+    return $user->establecimiento?->codigo === '01000';
+}
 }

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue';
+import { computed, ref, onMounted } from 'vue';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import SelectInput from '@/Components/SelectInput.vue';
 import PrimaryButton from '@/Components/PrimaryButton.vue';
@@ -18,6 +18,8 @@ const loading = ref(false);
 const error = ref(null);
 const success = ref(null);
 const csvPath = ref(null);
+const archivos = ref([]);
+const cargandoArchivos = ref(false);
 
 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
 
@@ -90,7 +92,7 @@ const handleSubmit = async () => {
                 method: 'GET',
                 headers: {
                     'Accept': 'application/json',
-                    'usuario': 'salud',
+                    'usuario': props.user?.name ?? 'salud',
                     'Modulo': 'SALUD',
                     ...(csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {}),
                 },
@@ -108,6 +110,7 @@ const handleSubmit = async () => {
 
         if (data.csv_path) {
             csvPath.value = data.csv_path;
+            await cargarArchivos(); // Actualiza la lista de archivos CSV después de guardar uno nuevo
         }
     } catch (err) {
         error.value = `Error al consumir el servicio: ${err.message}`;
@@ -116,6 +119,22 @@ const handleSubmit = async () => {
         loading.value = false;
     }
 };
+
+async function cargarArchivos() {
+    cargandoArchivos.value = true;
+    try {
+        const response = await fetch(route('sismaule.archivos-csv'), {
+            headers: { 'Accept': 'application/json' },
+        });
+        archivos.value = await response.json();
+    } catch (err) {
+        console.error('Error al listar archivos', err);
+    } finally {
+        cargandoArchivos.value = false;
+    }
+}
+onMounted(cargarArchivos);
+
 </script>
 
 <template>
@@ -169,11 +188,13 @@ const handleSubmit = async () => {
 
                     <div v-if="csvPath" class="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
                         <p class="text-blue-700 text-sm font-medium mb-2">
-                            Archivo CSV guardado:
+                            Archivo CSV generado: 
                         </p>
-                        <code class="block text-xs text-blue-600 bg-blue-100 rounded px-2 py-1 break-all">
-                            {{ csvPath }}
-                        </code>
+                        <a :href="route('sismaule.descargar-csv', { path: csvPath })"
+                            class="text-blue-600 hover:underline text-sm"
+                            >
+                        Descargar {{ csvPath.split('/').pop() }}
+                        </a>
                     </div>
 
                     <div class="mt-6 flex justify-end">
@@ -186,6 +207,7 @@ const handleSubmit = async () => {
                             {{ loading ? 'Cargando...' : 'Enviar' }}
                         </PrimaryButton>
                     </div>
+
                 </div>
             </div>
         </div>

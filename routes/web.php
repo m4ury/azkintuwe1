@@ -26,5 +26,7 @@ Route::middleware([
     Route::get('/sismaule/paciente-grupo-prioritario', [SismauleController::class, 'obtenerPacienteGrupoPrioritario'])
         ->name('sismaule.paciente-grupo-prioritario');
     Route::get('/sismaule/descargar-csv', [SismauleController::class, 'descargarCsv'])
-        ->name('sismaule.descargar-csv');
+    ->name('sismaule.descargar-csv');
+    Route::get('/sismaule/archivos-csv', [SismauleController::class, 'listarArchivosCsv'])
+        ->name('sismaule.archivos-csv');
 });
