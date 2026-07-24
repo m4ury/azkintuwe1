@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use Inertia\Response;
 use Illuminate\Http\Request;
@@ -24,12 +25,15 @@ class SismauleController extends Controller
         $establecimiento = $user->establecimiento;
         $comunas = Comuna::all();
         $servers = config('app.servers');
+        $grupos = config('app.grupos');
+
 
         return Inertia::render('Sismaule/Index', [
             'comunas' => $comunas,
             'user' => $user,
             'establecimiento' => $establecimiento,
             'servers' => $servers,
+            'grupos' => $grupos
         ]);
     }
 
@@ -37,15 +41,37 @@ class SismauleController extends Controller
     {
         $validated = $request->validated();
 
+        Log::info('SismauleController@obtenerPacienteGrupoPrioritario', [
+            'request_all' => $request->all(),
+            'validated' => $validated,
+        ]);
+
+        // Buscar el nombre del grupo en la configuración para enviarlo al servicio externo
+        $gruposConfig = config('app.grupos', []);
+        $selectedGrupo = collect($gruposConfig)->firstWhere('idgrupo', $validated['grupos']);
+
         $payload = [
-            'comuna' => $validated['comuna'],
+            'comuna'      => $validated['comuna'],
+            'idgrupo'     => $selectedGrupo['idgrupo'] ?? $validated['grupos'],
+            'nombregrupo' => $selectedGrupo['nombregrupo'] ?? '',
         ];
+
+        Log::info('Enviando petición al servicio Sismaule', [
+            'url'     => $this->pacienteGrupoPrioritarioUrl($validated['server_url']),
+            'payload' => $payload,
+            'headers' => [
+                'usuario'        => 'salud',
+                'Modulo'         => 'SALUD',
+                'HTTP_ESREPORTE' => 'S',
+            ]
+        ]);
 
         try {
             $response = Http::acceptJson()
                 ->withHeaders([
-                    'usuario' => 'salud',
-                    'Modulo' => 'SALUD',
+                    'usuario'        => 'salud',
+                    'Modulo'         => 'SALUD',
+                    'HTTP_ESREPORTE' => 'S',
                 ])
                 ->timeout(30)
                 ->get($this->pacienteGrupoPrioritarioUrl($validated['server_url']), $payload);
@@ -63,7 +89,7 @@ class SismauleController extends Controller
                 'response' => $response->json() ?? $response->body(),
             ], $response->status());
         }
-
+        $grupo = $response->json();
         $data = $response->json() ?? ['data' => [$response->body()]];
 
         // Buscar comuna por código para obtener el nombre
@@ -72,9 +98,12 @@ class SismauleController extends Controller
 
         if ($comuna) {
             try {
+                $nombreGrupo = $selectedGrupo['nombregrupo'] ?? 'SinGrupo';
+
                 $csvPath = $this->guardarComoCsv(
                     codigoComuna: $comuna->codigo,
                     nombreComuna: $comuna->nombre,
+                    nombreGrupo: $nombreGrupo,
                     data: $data,
                 );
             } catch (\RuntimeException $e) {
@@ -93,12 +122,13 @@ class SismauleController extends Controller
      *
      * @param  string  $codigoComuna  Código de la comuna (ej: 07101)
      * @param  string  $nombreComuna  Nombre de la comuna (ej: Cauquenes)
+     * @param  string  $nombreGrupo   Nombre del grupo prioritario (ej: Electrodependiente)
      * @param  array   $data          Datos obtenidos del servicio
      * @return string  Ruta relativa del archivo guardado
      *
      * @throws \RuntimeException  Si no hay datos para guardar
      */
-    private function guardarComoCsv(string $codigoComuna, string $nombreComuna, array $data): string
+    private function guardarComoCsv(string $codigoComuna, string $nombreComuna, string $nombreGrupo, array $data): string
     {
         // La respuesta del servicio viene como: {"respuesta": {"estado": "OK", "datos": [...]}}
         // Extraer el array de registros desde respuesta.datos
@@ -131,9 +161,13 @@ class SismauleController extends Controller
         // Unificar headers: todos los campos que aparezcan en al menos una fila
         $headers = array_unique(array_merge(...$allKeys));
 
-        // Generar nombre de archivo: codigo_nombre_YYYYMMDD_HHmmss.csv
+        // Sanitizar nombres para el archivo
+        $nombreComunaLimpio = str_replace(' ', '_', $nombreComuna);
+        $nombreGrupoLimpio = str_replace(' ', '_', $nombreGrupo);
+
+        // Generar nombre de archivo: codigo_comuna_comuna_grupo_YYYYMMDD_HHmmss.csv
         $fecha = now()->format('Ymd_His');
-        $nombreArchivo = "{$codigoComuna}_{$nombreComuna}_{$fecha}.csv";
+        $nombreArchivo = "{$codigoComuna}_{$nombreComunaLimpio}_{$nombreGrupoLimpio}_{$fecha}.csv";
 
         // Directorio: sismaule/{codigo_comuna}/
         $directorio = "sismaule/{$codigoComuna}";

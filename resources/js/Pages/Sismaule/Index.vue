@@ -10,9 +10,11 @@ const props = defineProps({
     establecimientos: Array,
     user: Object,
     servers: Object,
+    grupos: Object,
 });
 
 const selectedServer = ref('');
+const selectedGrupo = ref('');
 const selectedComunaValue = ref('');
 const loading = ref(false);
 const error = ref(null);
@@ -33,6 +35,13 @@ const serverOptions = computed(() =>
     })),
 );
 
+const grupoOptions = computed(() =>
+    Object.values(props.grupos ?? []).map((grupo) => ({
+        value: String(grupo.idgrupo),
+        label: grupo.nombregrupo,
+    })),
+);
+
 const comunaOptions = computed(() =>
     (props.comunas ?? []).map((comuna) => ({
         value: String(comuna.codigo ?? comuna.id),
@@ -44,14 +53,12 @@ const selectedComuna = computed(() => {
     if (!isDssm.value) {
         return userComuna.value;
     }
-
     return (props.comunas ?? []).find((comuna) => String(comuna.codigo) === selectedComunaValue.value) ?? null;
 });
 
 const validateForm = () => {
     if (!selectedServer.value) {
         error.value = 'Debe seleccionar un servidor';
-
         return false;
     }
 
@@ -59,10 +66,8 @@ const validateForm = () => {
         error.value = isDssm.value
             ? 'Debe seleccionar una comuna'
             : 'No se encontró una comuna asociada al usuario';
-
         return false;
     }
-
     return true;
 };
 
@@ -81,7 +86,11 @@ const handleSubmit = async () => {
         const params = new URLSearchParams({
             server_url: selectedServer.value,
             comuna: comuna.codigo,
+            grupos: selectedGrupo.value,
         });
+
+        console.log('--- DEBUG GRUPOS ---');
+        console.log('selectedGrupo:', selectedGrupo.value);
 
         console.log('Enviando petición a:', route('sismaule.paciente-grupo-prioritario'));
         console.log('Query params:', params.toString());
@@ -94,6 +103,7 @@ const handleSubmit = async () => {
                     'Accept': 'application/json',
                     'usuario': props.user?.name ?? 'salud',
                     'Modulo': 'SALUD',
+                    'HTTP_ESREPORTE': 'S',
                     ...(csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {}),
                 },
             },
@@ -160,6 +170,16 @@ onMounted(cargarArchivos);
                             />
                         </div>
 
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Grupo Prioritario:</label>
+                            <SelectInput
+                                v-model="selectedGrupo"
+                                :options="grupoOptions"
+                                placeholder="Seleccione grupo prioritaio"
+                                class="w-full"
+                            />
+                        </div>
+
                         <div v-if="isDssm">
                             <label class="block text-sm font-medium text-gray-700 mb-2">Comuna:</label>
                             <SelectInput
@@ -188,7 +208,7 @@ onMounted(cargarArchivos);
 
                     <div v-if="csvPath" class="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
                         <p class="text-blue-700 text-sm font-medium mb-2">
-                            Archivo CSV generado: 
+                            Archivo CSV generado:
                         </p>
                         <a :href="route('sismaule.descargar-csv', { path: csvPath })"
                             class="text-blue-600 hover:underline text-sm"
@@ -207,7 +227,6 @@ onMounted(cargarArchivos);
                             {{ loading ? 'Cargando...' : 'Enviar' }}
                         </PrimaryButton>
                     </div>
-
                 </div>
             </div>
         </div>

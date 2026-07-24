@@ -144,4 +144,36 @@ return [
             'label' => 'produccion'
         ],
     ],
+
+    /*|--------------------------------------------------------------------------
+    | Application Server URLs
+    |--------------------------------------------------------------------------
+    | Diferenciar el Servidor que se encuentra
+    */
+    'grupos' => [
+        [
+            'idgrupo' => '1',
+            'nombregrupo' => 'Electrodependiente'
+        ],
+        [
+            'idgrupo' => '2',
+            'nombregrupo' => 'Dependiente Severo'
+        ],
+        [
+            'idgrupo' => '3',
+            'nombregrupo' => 'Gestante'
+        ],
+        [
+            'idgrupo' => '4',
+            'nombregrupo' => 'Hospitalizacion Domiciliaria'
+        ],
+        [
+            'idgrupo' => '5',
+            'nombregrupo' => 'NANEAS'
+        ],
+        [
+            'idgrupo' => '6',
+            'nombregrupo' => 'Hemodialisis'
+        ],
+    ],
 ];
