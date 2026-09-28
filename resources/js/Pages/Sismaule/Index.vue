@@ -15,11 +15,11 @@ const props = defineProps({
 
 const selectedServer = ref('');
 const selectedGrupo = ref('');
-const selectedComunaValue = ref('');
+const selectedComunaValues = ref([]);
 const loading = ref(false);
 const error = ref(null);
 const success = ref(null);
-const csvPath = ref(null);
+const csvPaths = ref([]);
 const archivos = ref([]);
 const cargandoArchivos = ref(false);
 
@@ -42,18 +42,11 @@ const grupoOptions = computed(() =>
     })),
 );
 
-const comunaOptions = computed(() =>
-    (props.comunas ?? []).map((comuna) => ({
-        value: String(comuna.codigo ?? comuna.id),
-        label: comuna.nombre,
-    })),
-);
-
-const selectedComuna = computed(() => {
+const selectedComunaCodes = computed(() => {
     if (!isDssm.value) {
-        return userComuna.value;
+        return userComuna.value?.codigo ? [String(userComuna.value.codigo)] : [];
     }
-    return (props.comunas ?? []).find((comuna) => String(comuna.codigo) === selectedComunaValue.value) ?? null;
+    return selectedComunaValues.value;
 });
 
 const validateForm = () => {
@@ -62,13 +55,17 @@ const validateForm = () => {
         return false;
     }
 
-    if (!selectedComuna.value) {
+    if (selectedComunaCodes.value.length === 0) {
         error.value = isDssm.value
-            ? 'Debe seleccionar una comuna'
+            ? 'Debe seleccionar al menos una comuna'
             : 'No se encontró una comuna asociada al usuario';
         return false;
     }
     return true;
+};
+
+const selectAllComunas = () => {
+    selectedComunaValues.value = (props.comunas ?? []).map((comuna) => String(comuna.codigo));
 };
 
 const handleSubmit = async () => {
@@ -79,48 +76,60 @@ const handleSubmit = async () => {
     loading.value = true;
     error.value = null;
     success.value = null;
-    csvPath.value = null;
+    csvPaths.value = [];
 
     try {
-        const comuna = selectedComuna.value;
-        const params = new URLSearchParams({
-            server_url: selectedServer.value,
-            comuna: comuna.codigo,
-            grupos: selectedGrupo.value,
-        });
+        const failedComunas = [];
 
-        console.log('--- DEBUG GRUPOS ---');
-        console.log('selectedGrupo:', selectedGrupo.value);
+        for (const comunaCode of selectedComunaCodes.value) {
+            const comuna = (props.comunas ?? []).find((item) => String(item.codigo) === comunaCode)
+                ?? userComuna.value;
+            const params = new URLSearchParams({
+                server_url: selectedServer.value,
+                comuna: comunaCode,
+                grupos: selectedGrupo.value,
+            });
 
-        console.log('Enviando petición a:', route('sismaule.paciente-grupo-prioritario'));
-        console.log('Query params:', params.toString());
+            try {
+                const response = await fetch(
+                    `${route('sismaule.paciente-grupo-prioritario')}?${params.toString()}`,
+                    {
+                        method: 'GET',
+                        headers: {
+                            'Accept': 'application/json',
+                            'usuario': props.user?.name ?? 'salud',
+                            'Modulo': 'SALUD',
+                            'HTTP_ESREPORTE': 'S',
+                            ...(csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {}),
+                        },
+                    },
+                );
 
-        const response = await fetch(
-            `${route('sismaule.paciente-grupo-prioritario')}?${params.toString()}`,
-            {
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                    'usuario': props.user?.name ?? 'salud',
-                    'Modulo': 'SALUD',
-                    'HTTP_ESREPORTE': 'S',
-                    ...(csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {}),
-                },
-            },
-        );
+                const data = await response.json().catch(() => null);
 
-        const data = await response.json().catch(() => null);
+                if (!response.ok) {
+                    throw new Error(data?.message ?? `Error ${response.status}: ${response.statusText}`);
+                }
 
-        if (!response.ok) {
-            throw new Error(data?.message ?? `Error ${response.status}: ${response.statusText}`);
+                if (data?.csv_path) {
+                    csvPaths.value.push(data.csv_path);
+                } else {
+                    failedComunas.push(`${comuna?.nombre ?? comunaCode}: el servicio no generó un CSV`);
+                }
+            } catch (requestError) {
+                failedComunas.push(`${comuna?.nombre ?? comunaCode}: ${requestError.message}`);
+            }
         }
 
-        console.log('Respuesta del servicio:', data);
-        success.value = 'Datos obtenidos correctamente';
+        if (csvPaths.value.length > 0) {
+            success.value = `Se generaron ${csvPaths.value.length} archivo(s) CSV`;
+            await cargarArchivos();
+        }
 
-        if (data.csv_path) {
-            csvPath.value = data.csv_path;
-            await cargarArchivos(); // Actualiza la lista de archivos CSV después de guardar uno nuevo
+        if (failedComunas.length > 0) {
+            error.value = `No se completaron todas las comunas: ${failedComunas.join('; ')}`;
+        } else if (csvPaths.value.length === 0) {
+            error.value = 'El servicio no generó archivos CSV para las comunas seleccionadas';
         }
     } catch (err) {
         error.value = `Error al consumir el servicio: ${err.message}`;
@@ -181,13 +190,31 @@ onMounted(cargarArchivos);
                         </div>
 
                         <div v-if="isDssm">
-                            <label class="block text-sm font-medium text-gray-700 mb-2">Comuna:</label>
-                            <SelectInput
-                                v-model="selectedComunaValue"
-                                :options="comunaOptions"
-                                placeholder="Seleccione una comuna"
-                                class="w-full"
-                            />
+                            <div class="mb-2 flex items-center justify-between gap-3">
+                                <label for="comunas" class="block text-sm font-medium text-gray-700">Comunas:</label>
+                                <button
+                                    type="button"
+                                    class="text-sm font-medium text-blue-700 hover:underline"
+                                    @click="selectAllComunas"
+                                >
+                                    Seleccionar todas
+                                </button>
+                            </div>
+                            <select
+                                id="comunas"
+                                v-model="selectedComunaValues"
+                                multiple
+                                size="7"
+                                class="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                            >
+                                <option
+                                    v-for="comuna in comunas"
+                                    :key="comuna.codigo"
+                                    :value="String(comuna.codigo)"
+                                >
+                                    {{ comuna.nombre }}
+                                </option>
+                            </select>
                         </div>
 
                         <div v-else>
@@ -206,15 +233,20 @@ onMounted(cargarArchivos);
                         <p class="text-green-700">{{ success }}</p>
                     </div>
 
-                    <div v-if="csvPath" class="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div v-if="csvPaths.length" class="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
                         <p class="text-blue-700 text-sm font-medium mb-2">
-                            Archivo CSV generado:
+                            Archivos CSV generados:
                         </p>
-                        <a :href="route('sismaule.descargar-csv', { path: csvPath })"
-                            class="text-blue-600 hover:underline text-sm"
-                            >
-                        Descargar {{ csvPath.split('/').pop() }}
-                        </a>
+                        <ul class="space-y-1">
+                            <li v-for="path in csvPaths" :key="path">
+                                <a
+                                    :href="route('sismaule.descargar-csv', { path })"
+                                    class="text-blue-600 hover:underline text-sm"
+                                >
+                                    Descargar {{ path.split('/').pop() }}
+                                </a>
+                            </li>
+                        </ul>
                     </div>
 
                     <div class="mt-6 flex justify-end">
