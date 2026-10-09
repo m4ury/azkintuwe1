@@ -25,7 +25,10 @@ class SismaulePacienteGrupoPrioritarioRequest extends FormRequest
     {
         return [
             'server_url' => ['required', 'url', Rule::in($this->configuredServerUrls())],
-            'comuna' => ['required', 'string', 'max:255'],
+            'comuna' => ['nullable', 'string', 'max:255'],
+            'comuna_nombre' => ['nullable', 'string', 'max:255'],
+            'comunas' => ['nullable', 'array'],
+            'comunas.*' => ['string', 'max:255'],
             'grupos' => ['nullable', 'string', 'max:255'],
         ];
     }
@@ -35,6 +38,16 @@ class SismaulePacienteGrupoPrioritarioRequest extends FormRequest
         if ($this->filled('server_url')) {
             $this->merge([
                 'server_url' => rtrim((string) $this->input('server_url'), '/'),
+            ]);
+        }
+
+        if ($this->filled('comunas')) {
+            $this->merge([
+                'comunas' => array_values(array_filter(array_map('strval', (array) $this->input('comunas')))),
+            ]);
+        } elseif ($this->filled('comuna')) {
+            $this->merge([
+                'comunas' => [(string) $this->input('comuna')],
             ]);
         }
     }

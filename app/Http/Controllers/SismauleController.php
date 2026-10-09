@@ -14,6 +14,7 @@ use Inertia\Inertia;
 use Inertia\Response;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use RuntimeException;
 
 class SismauleController extends Controller
 {
@@ -46,73 +47,123 @@ class SismauleController extends Controller
             'validated' => $validated,
         ]);
 
+        $comunasSeleccionadas = array_values(array_filter((array) ($validated['comunas'] ?? []), fn ($comuna) => is_string($comuna) && $comuna !== ''));
+        if (empty($comunasSeleccionadas) && !empty($validated['comuna'])) {
+            $comunasSeleccionadas = [(string) $validated['comuna']];
+        }
+
+        if (empty($comunasSeleccionadas)) {
+            return response()->json([
+                'message' => 'Debe seleccionar al menos una comuna.',
+            ], 422);
+        }
+
         // Buscar el nombre del grupo en la configuración para enviarlo al servicio externo
         $gruposConfig = config('app.grupos', []);
-        $selectedGrupo = collect($gruposConfig)->firstWhere('idgrupo', $validated['grupos']);
+        $idGrupo = $validated['grupos'] ?? null;
+        $selectedGrupo = collect($gruposConfig)->firstWhere('idgrupo', $idGrupo);
+        $nombreGrupo = $selectedGrupo['nombregrupo'] ?? 'SinGrupo';
 
-        $payload = [
-            'comuna'      => $validated['comuna'],
-            'idgrupo'     => $selectedGrupo['idgrupo'] ?? $validated['grupos'],
-            'nombregrupo' => $selectedGrupo['nombregrupo'] ?? '',
-        ];
+        $comunas = Comuna::whereIn('codigo', $comunasSeleccionadas)->get()->keyBy('codigo');
+        $rowsConsolidados = [];
+        $comunasProcesadas = [];
 
-        Log::info('Enviando petición al servicio Sismaule', [
-            'url'     => $this->pacienteGrupoPrioritarioUrl($validated['server_url']),
-            'payload' => $payload,
-            'headers' => [
-                'usuario'        => 'salud',
-                'Modulo'         => 'SALUD',
-                'HTTP_ESREPORTE' => 'S',
-            ]
-        ]);
+        foreach ($comunasSeleccionadas as $codigoComuna) {
+            $comuna = $comunas->get($codigoComuna);
 
-        try {
-            $response = Http::acceptJson()
-                ->withHeaders([
-                    'usuario'        => 'salud',
+            if (! $comuna) {
+                continue;
+            }
+
+            $payload = [
+                'comuna'        => $codigoComuna,
+                'comuna_nombre' => $request->input('comuna_nombre') ?? $comuna->nombre,
+                'idgrupo'       => $selectedGrupo['idgrupo'] ?? $idGrupo,
+                'nombregrupo'   => $selectedGrupo['nombregrupo'] ?? '',
+            ];
+
+            $usuario = Auth::user()?->name ?? 'salud';
+
+            Log::info('Enviando petición al servicio Sismaule', [
+                'url'     => $this->pacienteGrupoPrioritarioUrl($validated['server_url']),
+                'payload' => $payload,
+                'headers' => [
+                    'usuario'        => $usuario,
                     'Modulo'         => 'SALUD',
                     'HTTP_ESREPORTE' => 'S',
-                ])
-                ->timeout(30)
-                ->get($this->pacienteGrupoPrioritarioUrl($validated['server_url']), $payload);
-        } catch (ConnectionException $exception) {
-            report($exception);
+                ],
+            ]);
 
-            return response()->json([
-                'message' => 'No se pudo conectar con el servicio Sismaule.',
-            ], 502);
+            try {
+                $response = Http::acceptJson()
+                    ->withHeaders([
+                        'usuario'        => $usuario,
+                        'Modulo'         => 'SALUD',
+                        'HTTP_ESREPORTE' => 'S',
+                    ])
+                    ->timeout(120)
+                    ->connectTimeout(30)
+                    ->get($this->pacienteGrupoPrioritarioUrl($validated['server_url']), $payload);
+            } catch (ConnectionException $exception) {
+                report($exception);
+
+                return response()->json([
+                    'message' => 'No se pudo conectar con el servicio Sismaule.',
+                ], 502);
+            }
+
+            if ($response->failed()) {
+                return response()->json([
+                    'message' => "El servicio Sismaule respondió con error {$response->status()}.",
+                    'response' => $response->json() ?? $response->body(),
+                ], $response->status());
+            }
+
+            $data = $response->json() ?? ['data' => [$response->body()]];
+            $rowsComuna = $this->extraerFilasDesdeRespuesta($data);
+
+            if (! empty($rowsComuna)) {
+                $rowsConsolidados = [...$rowsConsolidados, ...$rowsComuna];
+            }
+
+            $comunasProcesadas[] = $comuna;
         }
 
-        if ($response->failed()) {
-            return response()->json([
-                'message' => "El servicio Sismaule respondió con error {$response->status()}.",
-                'response' => $response->json() ?? $response->body(),
-            ], $response->status());
-        }
-        $grupo = $response->json();
-        $data = $response->json() ?? ['data' => [$response->body()]];
-
-        // Buscar comuna por código para obtener el nombre
-        $comuna = Comuna::where('codigo', $validated['comuna'])->first();
         $csvPath = null;
 
-        if ($comuna) {
+        if (! empty($comunasProcesadas) && ! empty($rowsConsolidados)) {
             try {
-                $nombreGrupo = $selectedGrupo['nombregrupo'] ?? 'SinGrupo';
+                $esConsolidadoDssm = count($comunasProcesadas) > 1 && $this->esDssm(Auth::user());
 
-                $csvPath = $this->guardarComoCsv(
-                    codigoComuna: $comuna->codigo,
-                    nombreComuna: $comuna->nombre,
-                    nombreGrupo: $nombreGrupo,
-                    data: $data,
-                );
-            } catch (\RuntimeException $e) {
+                if ($esConsolidadoDssm) {
+                    $csvPath = $this->guardarComoCsvConsolidado(
+                        array_map(fn ($comuna) => $comuna->codigo, $comunasProcesadas),
+                        array_map(fn ($comuna) => $comuna->nombre, $comunasProcesadas),
+                        $nombreGrupo,
+                        $rowsConsolidados,
+                    );
+                } else {
+                    $comunaPrincipal = $comunasProcesadas[0];
+                    $csvPath = $this->guardarComoCsv(
+                        codigoComuna: $comunaPrincipal->codigo,
+                        nombreComuna: $comunaPrincipal->nombre,
+                        nombreGrupo: $nombreGrupo,
+                        data: ['respuesta' => ['datos' => $rowsConsolidados]],
+                    );
+                }
+            } catch (RuntimeException $e) {
                 report($e);
             }
         }
 
         return response()->json([
-            'data' => $data,
+            'ok' => true,
+            'data' => [
+                'respuesta' => [
+                    'estado' => 'OK',
+                    'datos' => $rowsConsolidados,
+                ],
+            ],
             'csv_path' => $csvPath,
         ]);
     }
@@ -126,26 +177,50 @@ class SismauleController extends Controller
      * @param  array   $data          Datos obtenidos del servicio
      * @return string  Ruta relativa del archivo guardado
      *
-     * @throws \RuntimeException  Si no hay datos para guardar
+     * @throws RuntimeException  Si no hay datos para guardar
      */
     private function guardarComoCsv(string $codigoComuna, string $nombreComuna, string $nombreGrupo, array $data): string
     {
-        // La respuesta del servicio viene como: {"respuesta": {"estado": "OK", "datos": [...]}}
-        // Extraer el array de registros desde respuesta.datos
-        $rows = $data['respuesta']['datos']
-            ?? $data['data']
-            ?? $data;
+        $rows = $this->extraerFilasDesdeRespuesta($data);
 
-        if (!is_array($rows) || empty($rows)) {
-            throw new \RuntimeException('No hay datos para guardar en CSV');
+        if (empty($rows)) {
+            throw new RuntimeException('No hay datos para guardar en CSV');
         }
 
-        // Si es un array asociativo (un solo registro), lo normalizamos
-        if (array_keys($rows) !== range(0, count($rows) - 1)) {
-            $rows = [$rows];
+        $nombreComunaLimpio = str_replace(' ', '_', $nombreComuna);
+        $nombreGrupoLimpio = str_replace(' ', '_', $nombreGrupo);
+        $fecha = now()->format('Ymd_His');
+        $nombreArchivo = "$codigoComuna"."_"."$nombreComunaLimpio"."_"."$nombreGrupoLimpio"."_"."$fecha.csv";
+        $directorio = "sismaule/$codigoComuna";
+
+        return $this->guardarCsvEnDirectorio($directorio, $nombreArchivo, $rows);
+    }
+
+    private function guardarComoCsvConsolidado(array $codigosComunas, array $nombresComunas, string $nombreGrupo, array $rows): string
+    {
+        if (empty($rows)) {
+            throw new RuntimeException('No hay datos para guardar en CSV consolidado');
         }
 
-        // Recolectar todos los headers posibles de todas las filas
+        $prefix = 'consolidado';
+        $fecha = now()->format('Ymd_His');
+        $nombreGrupoLimpio = preg_replace('/[^\pL\pN]+/u', '_', trim($nombreGrupo));
+        $nombreGrupoLimpio = trim((string) $nombreGrupoLimpio, '_');
+        $nombreGrupoLimpio = $nombreGrupoLimpio !== '' ? Str::limit($nombreGrupoLimpio, 20, '') : 'regional';
+
+        $nombreArchivo = sprintf(
+            '%s_%s_%s.csv',
+            $prefix,
+            $nombreGrupoLimpio,
+            $fecha,
+        );
+        $directorio = 'sismaule/consolidado';
+
+        return $this->guardarCsvEnDirectorio($directorio, $nombreArchivo, $rows);
+    }
+
+    private function guardarCsvEnDirectorio(string $directorio, string $nombreArchivo, array $rows): string
+    {
         $allKeys = [];
 
         foreach ($rows as $row) {
@@ -155,45 +230,28 @@ class SismauleController extends Controller
         }
 
         if (empty($allKeys)) {
-            throw new \RuntimeException('No hay datos válidos para guardar en CSV');
+            throw new RuntimeException('No hay datos válidos para guardar en CSV');
         }
 
-        // Unificar headers: todos los campos que aparezcan en al menos una fila
-        $headers = array_unique(array_merge(...$allKeys));
-
-        // Sanitizar nombres para el archivo
-        $nombreComunaLimpio = str_replace(' ', '_', $nombreComuna);
-        $nombreGrupoLimpio = str_replace(' ', '_', $nombreGrupo);
-
-        // Generar nombre de archivo: codigo_comuna_comuna_grupo_YYYYMMDD_HHmmss.csv
-        $fecha = now()->format('Ymd_His');
-        $nombreArchivo = "{$codigoComuna}_{$nombreComunaLimpio}_{$nombreGrupoLimpio}_{$fecha}.csv";
-
-        // Directorio: sismaule/{codigo_comuna}/
-        $directorio = "sismaule/{$codigoComuna}";
+        $headers = array_values(array_unique(array_merge(...$allKeys)));
 
         Storage::makeDirectory($directorio);
 
-        $rutaRelativa = "{$directorio}/{$nombreArchivo}";
+        $rutaRelativa = "$directorio/$nombreArchivo";
         $rutaAbsoluta = Storage::path($rutaRelativa);
 
         $handle = fopen($rutaAbsoluta, 'w');
         if ($handle === false) {
-            throw new \RuntimeException("No se pudo abrir el archivo para escritura: {$rutaAbsoluta}");
+            throw new RuntimeException("No se pudo abrir el archivo para escritura: $rutaAbsoluta");
         }
 
-        // BOM UTF-8 para que Excel reconozca caracteres especiales
         fwrite($handle, "\xEF\xBB\xBF");
-
-        // Escribir headers con separador punto y coma (estándar Chile/Latam)
         fputcsv($handle, $headers, ';', '"', '\\');
 
-        // Escribir cada fila
         foreach ($rows as $row) {
             $line = [];
             foreach ($headers as $header) {
                 $value = is_array($row) ? ($row[$header] ?? '') : '';
-                // Si el valor es un array, lo serializamos como JSON string
                 if (is_array($value)) {
                     $value = json_encode($value, JSON_UNESCAPED_UNICODE);
                 }
@@ -205,6 +263,23 @@ class SismauleController extends Controller
         fclose($handle);
 
         return $rutaRelativa;
+    }
+
+    private function extraerFilasDesdeRespuesta(array $data): array
+    {
+        $rows = $data['respuesta']['datos']
+            ?? $data['data']
+            ?? $data;
+
+        if (! is_array($rows) || empty($rows)) {
+            return [];
+        }
+
+        if (array_keys($rows) !== range(0, count($rows) - 1)) {
+            return [$rows];
+        }
+
+        return $rows;
     }
 
     private function pacienteGrupoPrioritarioUrl(string $serverUrl): string
@@ -234,7 +309,7 @@ class SismauleController extends Controller
     // Si no es DSSM, solo puede descargar archivos de su propia comuna
     if (!$this->esDssm($user)) {
         $comuna = $user->establecimiento?->comuna;
-        $carpetaPermitida = $comuna ? "sismaule/{$comuna->codigo}/" : null;
+        $carpetaPermitida = $comuna ? "sismaule/$comuna->codigo/" : null;
 
         if (!$carpetaPermitida || !Str::startsWith($rutaSegura, $carpetaPermitida)) {
             abort(403, 'No tienes acceso a este archivo.');
@@ -252,7 +327,7 @@ public function listarArchivosCsv(): JsonResponse
         $carpetas = Storage::directories('sismaule');
     } else {
         $comuna = $user->establecimiento?->comuna;
-        $carpetas = $comuna ? ["sismaule/{$comuna->codigo}"] : [];
+        $carpetas = $comuna ? ["sismaule/$comuna->codigo"] : [];
     }
 
     $archivos = [];

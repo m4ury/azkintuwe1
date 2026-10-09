@@ -22,6 +22,7 @@ const success = ref(null);
 const csvPaths = ref([]);
 const archivos = ref([]);
 const cargandoArchivos = ref(false);
+const procesandoConsolidado = ref(false);
 
 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
 
@@ -74,68 +75,54 @@ const handleSubmit = async () => {
     }
 
     loading.value = true;
+    procesandoConsolidado.value = true;
     error.value = null;
     success.value = null;
     csvPaths.value = [];
 
     try {
-        const failedComunas = [];
+        const params = new URLSearchParams({
+            server_url: selectedServer.value,
+            grupos: selectedGrupo.value,
+        });
 
         for (const comunaCode of selectedComunaCodes.value) {
-            const comuna = (props.comunas ?? []).find((item) => String(item.codigo) === comunaCode)
-                ?? userComuna.value;
-            const params = new URLSearchParams({
-                server_url: selectedServer.value,
-                comuna: comunaCode,
-                grupos: selectedGrupo.value,
-            });
-
-            try {
-                const response = await fetch(
-                    `${route('sismaule.paciente-grupo-prioritario')}?${params.toString()}`,
-                    {
-                        method: 'GET',
-                        headers: {
-                            'Accept': 'application/json',
-                            'usuario': props.user?.name ?? 'salud',
-                            'Modulo': 'SALUD',
-                            'HTTP_ESREPORTE': 'S',
-                            ...(csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {}),
-                        },
-                    },
-                );
-
-                const data = await response.json().catch(() => null);
-
-                if (!response.ok) {
-                    throw new Error(data?.message ?? `Error ${response.status}: ${response.statusText}`);
-                }
-
-                if (data?.csv_path) {
-                    csvPaths.value.push(data.csv_path);
-                } else {
-                    failedComunas.push(`${comuna?.nombre ?? comunaCode}: el servicio no generó un CSV`);
-                }
-            } catch (requestError) {
-                failedComunas.push(`${comuna?.nombre ?? comunaCode}: ${requestError.message}`);
-            }
+            params.append('comunas[]', comunaCode);
         }
 
-        if (csvPaths.value.length > 0) {
-            success.value = `Se generaron ${csvPaths.value.length} archivo(s) CSV`;
+        const response = await fetch(
+            `${route('sismaule.paciente-grupo-prioritario')}?${params.toString()}`,
+            {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                    'usuario': props.user?.name ?? 'salud',
+                    'Modulo': 'SALUD',
+                    'HTTP_ESREPORTE': 'S',
+                    ...(csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {}),
+                },
+            },
+        );
+
+        const data = await response.json().catch(() => null);
+
+        if (!response.ok) {
+            throw new Error(data?.message ?? `Error ${response.status}: ${response.statusText}`);
+        }
+
+        if (data?.csv_path) {
+            csvPaths.value.push(data.csv_path);
+            success.value = `Se generó 1 archivo CSV consolidado`;
             await cargarArchivos();
-        }
-
-        if (failedComunas.length > 0) {
-            error.value = `No se completaron todas las comunas: ${failedComunas.join('; ')}`;
-        } else if (csvPaths.value.length === 0) {
-            error.value = 'El servicio no generó archivos CSV para las comunas seleccionadas';
+        } else {
+            error.value = 'El servicio no generó un archivo CSV consolidado para las comunas seleccionadas';
         }
     } catch (err) {
         error.value = `Error al consumir el servicio: ${err.message}`;
         console.error(err);
     } finally {
         loading.value = false;
+        procesandoConsolidado.value = false;
     }
 };
 
@@ -227,6 +214,12 @@ onMounted(cargarArchivos);
 
                     <div v-if="error" class="mt-6 bg-red-50 border border-red-200 rounded-lg p-4">
                         <p class="text-red-700">{{ error }}</p>
+                    </div>
+
+                    <div v-if="procesandoConsolidado" class="mt-6 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                        <p class="text-amber-800 font-medium">
+                            Procesando consolidado de comunas seleccionadas… esto puede tardar unos segundos.
+                        </p>
                     </div>
 
                     <div v-if="success" class="mt-6 bg-green-50 border border-green-200 rounded-lg p-4">
